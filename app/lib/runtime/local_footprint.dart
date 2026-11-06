@@ -1,6 +1,8 @@
 // What the on-device runtime costs, shown where the
 // person decides whether to install it (first run, 安装本机运行环境).
 
+import 'dart:io' show Platform;
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../diagnostics/diagnostics_channel.dart';
@@ -11,7 +13,13 @@ extension RuntimeMissing on RuntimeStatus {
   /// uninstalled. Every real report names the bundled runtime; a status
   /// without one is no report at all (no native side: tests, other
   /// platforms) and counts as unknown, not missing.
-  bool get runtimeMissing => phase == RuntimePhase.notInstalled && bundledVersion != null;
+  ///
+  /// iOS exception (fork, remote-only build): there is no native side and
+  /// never will be — no on-device runtime exists on iOS — so "not
+  /// installed, no report" is genuinely missing there. Every place that
+  /// branches on this (remote auto-switch, hide the 本机 row, the
+  /// settings overview) then treats iOS as remote-only.
+  bool get runtimeMissing => phase == RuntimePhase.notInstalled && (bundledVersion != null || Platform.isIOS);
 }
 
 /// The phone's memory and free storage, and the bundled runtime's unpacked

@@ -518,8 +518,13 @@ class RuntimeBridge {
       .asBroadcastStream();
 
   Future<RuntimeStatus> status() async {
-    final map = await _methods.invokeMapMethod<Object?, Object?>('getStatus');
-    return map == null ? const RuntimeStatus.unknown() : RuntimeStatus.fromMap(map);
+    try {
+      final map = await _methods.invokeMapMethod<Object?, Object?>('getStatus');
+      return map == null ? const RuntimeStatus.unknown() : RuntimeStatus.fromMap(map);
+    } on MissingPluginException {
+      // No native side (iOS remote-only build, tests): no runtime, ever.
+      return const RuntimeStatus.unknown();
+    }
   }
 
   /// Serializes local bundled-skill IO with native rootfs activation/reset. A
@@ -554,8 +559,16 @@ class RuntimeBridge {
       _methods.invokeMethod<void>('cancelManagedSkill', {'requestId': requestId});
 
   /// [dropKept]: give up what a reset kept but cannot be put back.
-  Future<void> install({bool dropKept = false}) =>
-      _methods.invokeMethod<void>('install', dropKept ? const {'dropKept': true} : null);
+  ///
+  /// No native side (iOS remote-only build): silently a no-op, so a stray
+  /// install/start/stop call can never throw MissingPluginException.
+  Future<void> install({bool dropKept = false}) async {
+    try {
+      await _methods.invokeMethod<void>('install', dropKept ? const {'dropKept': true} : null);
+    } on MissingPluginException {
+      // No native side: nothing to do.
+    }
+  }
 
   /// [phoneStorage] mounts the phone's shared storage at /sdcard (needs [requestStorage] first).
   /// [mode] null keeps the current mode; [EngineMode.normal] while in safe mode starts the
@@ -566,12 +579,18 @@ class RuntimeBridge {
     bool phoneStorage = false,
     EngineMode? mode,
     bool visualReplies = true,
-  }) => _methods.invokeMethod<void>('start', {
-    'env': env,
-    'phoneStorage': phoneStorage,
-    'mode': mode?.name,
-    'visualReplies': visualReplies,
-  });
+  }) async {
+    try {
+      await _methods.invokeMethod<void>('start', {
+        'env': env,
+        'phoneStorage': phoneStorage,
+        'mode': mode?.name,
+        'visualReplies': visualReplies,
+      });
+    } on MissingPluginException {
+      // No native side: nothing to do.
+    }
+  }
 
   Future<LastKnownGood> lastKnownGood() async {
     final map = await _methods.invokeMapMethod<Object?, Object?>('lastKnownGood');
@@ -602,12 +621,30 @@ class RuntimeBridge {
     ];
   }
 
-  Future<void> clearFailure() => _methods.invokeMethod<void>('clearFailure');
+  Future<void> clearFailure() async {
+    try {
+      await _methods.invokeMethod<void>('clearFailure');
+    } on MissingPluginException {
+      // No native side: nothing to do.
+    }
+  }
 
-  Future<void> setAutoSafe(bool enabled) => _methods.invokeMethod<void>('setAutoSafe', {'enabled': enabled});
+  Future<void> setAutoSafe(bool enabled) async {
+    try {
+      await _methods.invokeMethod<void>('setAutoSafe', {'enabled': enabled});
+    } on MissingPluginException {
+      // No native side: nothing to do.
+    }
+  }
 
   /// Takes effect on the next start; native code rejects changes while active.
-  Future<void> setDirectEngine(bool enabled) => _methods.invokeMethod<void>('setDirectEngine', {'enabled': enabled});
+  Future<void> setDirectEngine(bool enabled) async {
+    try {
+      await _methods.invokeMethod<void>('setDirectEngine', {'enabled': enabled});
+    } on MissingPluginException {
+      // No native side: nothing to do.
+    }
+  }
 
   /// Output around the last failure, tokens masked.
   Future<List<String>> failureLog() async => (await _methods.invokeListMethod<String>('failureLog')) ?? const [];
@@ -687,10 +724,22 @@ class RuntimeBridge {
     }
   }
 
-  Future<void> stop() => _methods.invokeMethod<void>('stop');
+  Future<void> stop() async {
+    try {
+      await _methods.invokeMethod<void>('stop');
+    } on MissingPluginException {
+      // No native side: nothing to do.
+    }
+  }
 
   /// Deletes the runtime with everything in /root except [keep].
-  Future<void> reset({ResetKeep keep = const ResetKeep()}) => _methods.invokeMethod<void>('reset', {'keep': keep.wire});
+  Future<void> reset({ResetKeep keep = const ResetKeep()}) async {
+    try {
+      await _methods.invokeMethod<void>('reset', {'keep': keep.wire});
+    } on MissingPluginException {
+      // No native side: nothing to do.
+    }
+  }
 
   Future<List<String>> logs({int lines = 500}) async =>
       (await _methods.invokeListMethod<String>('getLogs', {'lines': lines})) ?? const [];

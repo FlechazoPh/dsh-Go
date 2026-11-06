@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -118,13 +119,16 @@ class HostSheet extends ConsumerWidget {
               SheetGroup(
                 margin: const EdgeInsets.fromLTRB(SheetTitleBar.inset, 0, SheetTitleBar.inset, 12),
                 children: [
-                  _HostRow(
-                    host: HostRef.local,
-                    title: l10n.commonThisPhone,
-                    subtitle: l10n.remoteThisPhoneDsh,
-                    active: active.isLocal,
-                    onTap: localMissing ? installLocal : () => pick(HostRef.local),
-                  ),
+                  // iOS remote-only build: no on-device runtime, so there is
+                  // no 本机 row to switch to (or install from).
+                  if (!Platform.isIOS)
+                    _HostRow(
+                      host: HostRef.local,
+                      title: l10n.commonThisPhone,
+                      subtitle: l10n.remoteThisPhoneDsh,
+                      active: active.isLocal,
+                      onTap: localMissing ? installLocal : () => pick(HostRef.local),
+                    ),
                   for (final h in ssh)
                     _HostRow(
                       host: HostRef.ssh(h.id),

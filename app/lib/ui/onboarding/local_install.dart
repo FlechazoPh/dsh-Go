@@ -3,6 +3,7 @@
 // the empty chat and drawer, the web page) opens this one page.
 
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -15,6 +16,7 @@ import '../../state/engine_control.dart';
 import '../../state/hosts_state.dart';
 import '../../state/onboarding_state.dart';
 import '../../state/settings_state.dart';
+import '../remote/remote_screen.dart';
 import '../shell/page_frame.dart';
 import '../theme/app_icons.dart';
 import '../theme/theme.dart';
@@ -23,8 +25,17 @@ import 'onboarding_scaffold.dart';
 import 'runtime_setup_page.dart';
 
 /// Opens the install page over whatever is showing.
-Future<void> openLocalInstall(BuildContext context, {bool useWhenDone = false}) =>
-    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LocalInstallPage(useWhenDone: useWhenDone)));
+///
+/// iOS remote-only build: there is no runtime to install, so every
+/// 「安装本机运行环境」 entry instead opens the remote-host list, where the
+/// person adds the computer or server that runs DSH.
+Future<void> openLocalInstall(BuildContext context, {bool useWhenDone = false}) {
+  if (Platform.isIOS) {
+    return Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const RemoteScreen()));
+  }
+  return Navigator.of(context)
+      .push(MaterialPageRoute<void>(builder: (_) => LocalInstallPage(useWhenDone: useWhenDone)));
+}
 
 /// What installing costs and one 「安装」; then the same progress as first
 /// run. Once installed the engine starts, and a phone with no model yet goes

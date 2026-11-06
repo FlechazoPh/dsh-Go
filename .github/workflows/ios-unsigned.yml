@@ -1,0 +1,59 @@
+# iOS remote-only unsigned IPA (personal sideload build, fork only).
+#
+# dsh-Go upstream is Android-only (no app/ios). This branch adds a minimal
+# iOS Runner plus Dart-side remote-only gating (marked "iOS remote-only
+# build" in the touched files) and builds an unsigned IPA on a macOS runner.
+#
+# No Release is created: the IPA is only a workflow artifact for the owner's
+# own sideloading. Do not publish it anywhere.
+name: iOS unsigned IPA (remote-only)
+
+on:
+  push:
+    branches: [ios-remote-only]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios-unsigned:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      FLUTTER_VERSION: 3.47.7
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Pub get
+        working-directory: app
+        run: flutter pub get
+
+      - name: Analyze
+        working-directory: app
+        run: flutter analyze
+
+      - name: Build unsigned IPA
+        working-directory: app
+        run: >
+          flutter build ipa --no-codesign
+          --build-name 1.0.11
+          --build-number ${{ github.run_number }}
+
+      - name: Show IPA
+        run: ls -la app/build/ios/ipa/
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-go-ios-remote-only
+          path: app/build/ios/ipa/*.ipa
+          retention-days: 30

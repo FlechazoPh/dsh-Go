@@ -1,6 +1,8 @@
 // The first-run question 「DSH 在哪里运行？」 — on this phone (install the runtime) or
 // on a remote host — with what each costs.
 
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -57,7 +59,14 @@ class _RuntimeChoiceViewState extends ConsumerState<RuntimeChoiceView> {
     final l10n = context.l10n;
     final footprint = ref.watch(localFootprintProvider).value;
     final light = ref.watch(performanceDefaultsProvider).recommendRemote;
-    final suggested = light || footprint?.suggestRemote == true ? RuntimeOption.remote : RuntimeOption.local;
+    // iOS remote-only build: there is no on-device runtime, so the 本机 card
+    // is hidden and remote is the only (and suggested) choice.
+    final isIOS = Platform.isIOS;
+    final suggested = isIOS
+        ? RuntimeOption.remote
+        : light || footprint?.suggestRemote == true
+        ? RuntimeOption.remote
+        : RuntimeOption.local;
     final selected = _picked ?? suggested;
     final colors = DshColors.of(context);
 
@@ -82,16 +91,18 @@ class _RuntimeChoiceViewState extends ConsumerState<RuntimeChoiceView> {
           message: l10n.localEnvChooseMessage,
         ),
         const SizedBox(height: 28),
-        RuntimeOptionCard(
-          key: const ValueKey('runtime-option-local'),
-          icon: AppIcons.thisPhone,
-          title: l10n.commonThisPhone,
-          detail: localDetail,
-          detailColor: localWarn ? colors.warning : null,
-          selected: selected == RuntimeOption.local,
-          onTap: () => setState(() => _picked = RuntimeOption.local),
-        ),
-        const SizedBox(height: RuntimeOptionCard.gap),
+        if (!isIOS) ...[
+          RuntimeOptionCard(
+            key: const ValueKey('runtime-option-local'),
+            icon: AppIcons.thisPhone,
+            title: l10n.commonThisPhone,
+            detail: localDetail,
+            detailColor: localWarn ? colors.warning : null,
+            selected: selected == RuntimeOption.local,
+            onTap: () => setState(() => _picked = RuntimeOption.local),
+          ),
+          const SizedBox(height: RuntimeOptionCard.gap),
+        ],
         RuntimeOptionCard(
           key: const ValueKey('runtime-option-remote'),
           icon: AppIcons.computer,

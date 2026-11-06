@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -13,6 +14,8 @@ abstract final class EngineControl {
   /// Stops the local DSH, waits until the process has actually exited, then starts it again.
   /// [mode] null keeps the current mode (a restart in safe mode stays in safe mode).
   static Future<void> restart(ProviderContainer container, {EngineMode? mode}) async {
+    // iOS remote-only build: there is no local engine to restart.
+    if (Platform.isIOS) return;
     final runtime = container.read(localRuntimeProvider.notifier);
     final phase = container.read(localRuntimeProvider).status.phase;
     if (phase == RuntimePhase.running || phase == RuntimePhase.starting || phase == RuntimePhase.stopping) {
@@ -27,6 +30,8 @@ abstract final class EngineControl {
 
   /// Starts the engine unless it is already starting or running.
   static Future<void> ensureStarted(ProviderContainer container) async {
+    // iOS remote-only build: there is no local engine to start.
+    if (Platform.isIOS) return;
     final phase = container.read(localRuntimeProvider).status.phase;
     if (phase == RuntimePhase.installed || phase == RuntimePhase.error) {
       await container.read(localRuntimeProvider.notifier).start();

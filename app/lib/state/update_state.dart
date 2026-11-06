@@ -380,6 +380,9 @@ class AppUpdateController extends Notifier<AppUpdateState> {
   /// True when the caller should offer the update (newer and not skipped).
   Future<bool> autoCheckIfDue() async {
     await ready;
+    // iOS remote-only build: updates are APK downloads, which cannot install
+    // on iOS; never offer them.
+    if (Platform.isIOS) return false;
     final prefs = _prefs;
     if (!ref.mounted || prefs == null || !state.autoCheck || state.busy) return false;
     DateTime? at(String key) {
@@ -397,6 +400,8 @@ class AppUpdateController extends Notifier<AppUpdateState> {
   Future<UpdateCheckPhase> check() async {
     await ready;
     if (!ref.mounted) return UpdateCheckPhase.idle;
+    // iOS remote-only build: see autoCheckIfDue.
+    if (Platform.isIOS) return UpdateCheckPhase.upToDate;
     if (state.busy) return state.check;
     return _checking ??= _check().whenComplete(() => _checking = null);
   }

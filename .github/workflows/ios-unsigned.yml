@@ -18,7 +18,11 @@ permissions:
 
 jobs:
   build-ios-unsigned:
-    runs-on: macos-15
+    # macos-15 (arm64) repeatedly failed to acquire a runner
+    # ("job was not acquired ... capacity constraints", 2026-11-06, twice).
+    # macos-15-intel is the same image family (same Xcode 26.x set) on the
+    # Intel capacity pool; an iOS arm64 IPA cross-compiles fine there.
+    runs-on: macos-15-intel
     timeout-minutes: 60
     env:
       FLUTTER_VERSION: 3.47.7

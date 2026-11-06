@@ -64,8 +64,19 @@ jobs:
           --build-name 1.0.11
           --build-number ${{ github.run_number }}
 
-      - name: Show IPA
-        run: ls -la app/build/ios/ipa/
+      # --no-codesign archives but skips IPA export ("Codesigning disabled
+      # with --no-codesign, skipping IPA"), so package the unsigned .app
+      # from the archive into an IPA by hand: Payload/Runner.app zipped.
+      - name: Package unsigned IPA
+        working-directory: app
+        run: |
+          APP="build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app"
+          test -d "$APP" || { echo "::error::No Runner.app in archive"; find build/ios/archive -maxdepth 4 | head; exit 1; }
+          rm -rf /tmp/dsh-ipa && mkdir -p /tmp/dsh-ipa/Payload
+          cp -r "$APP" /tmp/dsh-ipa/Payload/
+          mkdir -p build/ios/ipa
+          (cd /tmp/dsh-ipa && zip -r -y "$GITHUB_WORKSPACE/app/build/ios/ipa/dsh-go-ios-remote-only.ipa" Payload)
+          ls -la build/ios/ipa/
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4

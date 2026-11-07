@@ -1,13 +1,29 @@
+import ActivityKit
 import Flutter
 import UIKit
 import UserNotifications
 
 /// iOS side of the `dsh/notify` channel (Android: NotifyPlugin.kt).
 /// Local notifications only: the four chat alerts (turn done / failed-or-stopped /
-/// approval / question). No push, no entitlements, no Live Activity (ActivityKit
-/// is out of scope for the remote-only iOS build).
-///
-/// Contract (see app/lib/notify/notify_channel.dart):
+/// approval / question). No push, no entitlements. Live Activity (ActivityKit)
+/// is implemented here too (round 4): the widget extension in
+/// app/ios/LiveActivity renders it; this plugin starts / updates / ends it
+/// from what Dart pushes, and reports whether the system allows it.
+/// - `live` takes a LivePush map {enabled, packId?, activity?} (see
+///   app/lib/notify/notify_channel.dart). Enabled=false or activity=null
+///   ends the activity; done/failed first update to the terminal text and
+///   then end immediately, so a finished turn never lingers. Updates are
+///   throttled to ~600ms (Android's interval) with a trailing update, so a
+///   burst of pushes cannot spam ActivityKit.
+/// - The activity only updates while the app process is alive. Once iOS
+///   suspends the app after it goes to the background, the displayed state
+///   freezes (same ceiling as local notifications; there is no push server
+///   to update it remotely). Live Activities also end by themselves after
+///   8 hours at most (staleDate is set to +8h on request).
+/// - iOS has no per-notification lock-screen redaction, so Android's publicText
+///   cannot be reproduced: the body is the real title/text. The person controls
+///   lock-screen previews in system settings (Notifications → DSH Go →
+///   Show Previews).
 /// - `status` returns {enabled, done, attention}; `enabled` is the system
 ///   authorization state; done/attention are always true on iOS (no per-channel
 ///   blocking exists here).
@@ -139,14 +155,35 @@ final class NotifyPlugin: NSObject, FlutterPlugin, UNUserNotificationCenterDeleg
       }
       result(nil)
     case "live":
-      // Live Activity (ActivityKit) is out of scope for this build.
+      // Live Activity: start / update / end from the LivePush Dart sends.
+      // Dart ignores the return value; answer at once and do the
+      // ActivityKit work on a Task (request/update/end are async).
+      if #available(iOS 16.1, *) {
+        live16(args: call.arguments as? [String: Any])
+      }
       result(nil)
     case "liveStatus":
       // LiveSystemStatus.fromMap reads these three; native defaults to true
-      // when a map is returned, so the settings page shows "unsupported".
-      result(["supported": false, "allowed": false, "settings": false])
+      // when a map is returned.
+      if #available(iOS 16.1, *) {
+        result([
+          "supported": true,
+          "allowed": ActivityAuthorizationInfo().areActivitiesEnabled,
+          "settings": true,
+        ])
+      } else {
+        result(["supported": false, "allowed": false, "settings": false])
+      }
     case "openLiveSettings":
-      result(false)
+      // iOS has no deep link straight to the per-app Live Activities
+      // switch; the app's own settings page holds it (Notifications →
+      // DSH Go → Live Activities), so open that.
+      if let url = URL(string: UIApplication.openSettingsURLString) {
+        UIApplication.shared.open(url, options: [:], completionHandler: nil)
+        result(true)
+      } else {
+        result(false)
+      }
     default:
       result(FlutterMethodNotImplemented)
     }
@@ -229,6 +266,33 @@ final class NotifyPlugin: NSObject, FlutterPlugin, UNUserNotificationCenterDeleg
         .filter { $0.content.threadIdentifier == threadIdentifier }
         .map { $0.identifier }
       if !ids.isEmpty { self?.center.removePendingNotificationRequests(withIdentifiers: ids) }
+    }
+  }
+
+  // MARK: - Live Activity (ActivityKit, iOS 16.1+)
+
+  // The box holds the running Activity. It is stored as `Any` because the
+  // Activity type itself is only available on iOS 16.1+ while this target
+  // still deploys to iOS 15.0; every access goes through `#available`.
+  private var liveBox: Any?
+
+  @available(iOS 16.1, *)
+  private func live16(args: [String: Any]?) {
+    let enabled = args?["enabled"] as? Bool ?? false
+    let activity = args?["activity"] as? [String: Any]
+    // packId rides on the LivePush itself, not inside the activity map.
+    let packId = args?["packId"] as? String
+    Task { [weak self] in
+      guard let self else { return }
+      let box: LiveActivityBox
+      if let existing = self.liveBox as? LiveActivityBox {
+        box = existing
+      } else {
+        box = LiveActivityBox()
+        self.liveBox = box
+      }
+      await box.apply(enabled: enabled, activity: activity, packId: packId)
+      if box.activity == nil { self.liveBox = nil }
     }
   }
 
@@ -366,5 +430,131 @@ private final class ActionsStreamHandler: NSObject, FlutterStreamHandler {
   func onCancel(withArguments arguments: Any?) -> FlutterError? {
     plugin?.actionsCancelled()
     return nil
+  }
+}
+
+/// Owns the one running Live Activity for the `dsh/notify` channel.
+///
+/// iOS 16.1+ only (the whole class is gated; the Runner target still
+/// deploys to iOS 15.0). The state it posts is built from the LivePush map
+/// Dart sends (`LiveActivity.toMap()`); the widget extension renders it.
+///
+/// Rules, mirroring Android's LiveActivity.kt:
+/// - No activity exists and the push is a terminal kind (done/failed):
+///   nothing is started just to end it.
+/// - Terminal kinds on a live activity: update to the terminal text first,
+///   then end with `.immediate` so the finished turn does not linger.
+/// - Anything else: start if none exists, else update. Equal states are
+///   not re-posted (Dart already dedupes, this is the second net).
+/// - Updates are throttled to ~600ms; a push that arrives inside the
+///   window is coalesced into one trailing update instead of being lost.
+/// - A request is only made while `areActivitiesEnabled` is true; a denied
+///   system switch fails silently and `liveStatus` is how Dart finds out.
+@available(iOS 16.1, *)
+private final class LiveActivityBox {
+  private static let minUpdateInterval: TimeInterval = 0.6
+  /// Live Activities end by themselves after 8 hours at most.
+  private static let maxLifetime: TimeInterval = 8 * 3600
+
+  var activity: Activity<DSHActivityAttributes>?
+  private var lastState: DSHActivityAttributes.ContentState?
+  private var lastUpdate = Date.distantPast
+  private var pendingUpdate: Task<Void, Never>?
+
+  /// Applies one LivePush. Pushes arrive one at a time from Dart's bridge
+  /// (equal pushes are deduped there), so concurrent calls are rare; the
+  /// throttle's trailing task is cancelled by a newer push, and a terminal
+  /// push always wins over a pending update. Worst case for a race is one
+  /// stale intermediate state on the island until the next push.
+  func apply(enabled: Bool, activity dict: [String: Any]?, packId: String?) async {
+    pendingUpdate?.cancel()
+    pendingUpdate = nil
+    guard enabled, let dict else {
+      await endCurrent()
+      return
+    }
+    let state = LiveActivityBox.state(from: dict, packId: packId)
+    let terminal = state.kind == "done" || state.kind == "failed"
+    if let current = activity {
+      if terminal {
+        lastState = state
+        lastUpdate = Date()
+        await current.update(state)
+        await current.end(state, dismissalPolicy: .immediate)
+        self.activity = nil
+        lastState = nil
+      } else if state != lastState {
+        await updateThrottled(current: current, state: state)
+      }
+      return
+    }
+    // No activity running.
+    guard !terminal else { return }
+    guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+    do {
+      let content = ActivityContent(
+        state: state,
+        staleDate: Date().addingTimeInterval(Self.maxLifetime))
+      let requested = try Activity.request(
+        attributes: DSHActivityAttributes(), content: content)
+      activity = requested
+      lastState = state
+      lastUpdate = Date()
+    } catch {
+      // Disabled, or the system refused the request: stay silent.
+      // `liveStatus` is the channel Dart uses to learn about it.
+    }
+  }
+
+  private func updateThrottled(current: Activity<DSHActivityAttributes>, state: DSHActivityAttributes.ContentState) async {
+    let elapsed = Date().timeIntervalSince(lastUpdate)
+    if elapsed >= Self.minUpdateInterval {
+      lastState = state
+      lastUpdate = Date()
+      await current.update(state)
+      return
+    }
+    // Inside the window: one trailing update carrying the newest state.
+    let delay = Self.minUpdateInterval - elapsed
+    pendingUpdate = Task { [weak self] in
+      try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+      guard let self, !Task.isCancelled else { return }
+      guard let current = self.activity else { return }
+      self.lastState = state
+      self.lastUpdate = Date()
+      await current.update(state)
+    }
+    // Await the trailing update so a terminal push that follows it does
+    // not race ahead of the state it replaces.
+    await pendingUpdate?.value
+  }
+
+  private func endCurrent() async {
+    pendingUpdate?.cancel()
+    pendingUpdate = nil
+    guard let current = activity else { return }
+    activity = nil
+    lastState = nil
+    await current.end(nil, dismissalPolicy: .immediate)
+  }
+
+  private static func state(from dict: [String: Any], packId: String?) -> DSHActivityAttributes.ContentState {
+    let string = { (key: String) -> String in dict[key] as? String ?? "" }
+    let sinceMs: Int64? = {
+      if let n = dict["sinceMs"] as? NSNumber { return n.int64Value }
+      if let n = dict["sinceMs"] as? Int { return Int64(n) }
+      return nil
+    }()
+    return DSHActivityAttributes.ContentState(
+      kind: string("kind"),
+      title: string("title"),
+      text: string("text"),
+      chip: string("chip"),
+      publicText: string("publicText"),
+      mood: string("mood"),
+      sinceMs: sinceMs,
+      eventId: dict["eventId"] as? String,
+      packId: packId
+    )
   }
 }

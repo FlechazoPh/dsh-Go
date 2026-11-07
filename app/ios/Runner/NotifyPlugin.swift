@@ -446,6 +446,13 @@ private final class ActionsStreamHandler: NSObject, FlutterStreamHandler {
 ///   then end with `.immediate` so the finished turn does not linger.
 /// - Anything else: start if none exists, else update. Equal states are
 ///   not re-posted (Dart already dedupes, this is the second net).
+/// - Lifecycle calls use the 16.1 `using:` spelling (`update(using:)`,
+///   `end(using:dismissalPolicy:)`): the bare-`ContentState` `update(_:)` /
+///   `end(_:)` forms do not exist in the Xcode 27 SDK, and the
+///   `ActivityContent` forms are the 16.2+ replacements. The `using:`
+///   overloads are deprecated but still present in Xcode 27 (the
+///   compiler itself names `update(using:)`); warnings are acceptable,
+///   errors are not.
 /// - Updates are throttled to ~600ms; a push that arrives inside the
 ///   window is coalesced into one trailing update instead of being lost.
 /// - A request is only made while `areActivitiesEnabled` is true; a denied
@@ -479,8 +486,8 @@ private final class LiveActivityBox {
       if terminal {
         lastState = state
         lastUpdate = Date()
-        await current.update(state)
-        await current.end(state, dismissalPolicy: .immediate)
+        await current.update(using: state)
+        await current.end(using: state, dismissalPolicy: .immediate)
         self.activity = nil
         lastState = nil
       } else if state != lastState {
@@ -511,7 +518,7 @@ private final class LiveActivityBox {
     if elapsed >= Self.minUpdateInterval {
       lastState = state
       lastUpdate = Date()
-      await current.update(state)
+      await current.update(using: state)
       return
     }
     // Inside the window: one trailing update carrying the newest state.
@@ -522,7 +529,7 @@ private final class LiveActivityBox {
       guard let current = self.activity else { return }
       self.lastState = state
       self.lastUpdate = Date()
-      await current.update(state)
+      await current.update(using: state)
     }
     // Await the trailing update so a terminal push that follows it does
     // not race ahead of the state it replaces.
@@ -535,7 +542,7 @@ private final class LiveActivityBox {
     guard let current = activity else { return }
     activity = nil
     lastState = nil
-    await current.end(nil, dismissalPolicy: .immediate)
+    await current.end(using: nil, dismissalPolicy: .immediate)
   }
 
   private static func state(from dict: [String: Any], packId: String?) -> DSHActivityAttributes.ContentState {

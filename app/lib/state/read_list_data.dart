@@ -306,4 +306,45 @@ final class CachedSessions extends ReadListData {
       for (final s in bots) {'id': s.sessionId, 'title': s.title, 'updated': s.updatedAt.millisecondsSinceEpoch},
     ],
   };
+
+  /// Inverse of [toJson], for the on-disk cache (see offline_cache.dart).
+  /// Rows with a missing id or timestamp are skipped; a malformed document
+  /// returns null. Restored rows are display-only: running/blank/agent
+  /// availability are always false, matching [_copy].
+  static CachedSessions? fromJson(Object? json) {
+    if (json is! Map) return null;
+    try {
+      List<SessionSummary> rows(Object? value) {
+        final list = value is List ? value : const [];
+        final out = <SessionSummary>[];
+        for (final row in list) {
+          if (row is! Map) continue;
+          final id = row['id'];
+          final updated = row['updated'];
+          if (id is! String || id.isEmpty || updated is! int) continue;
+          out.add(
+            SessionSummary(
+              sessionId: id,
+              updatedAt: DateTime.fromMillisecondsSinceEpoch(updated),
+              running: false,
+              blank: false,
+              agentAvailable: false,
+              projections: SessionProjections(-1, Map.unmodifiable({'title': row['title'] is String ? row['title'] : null})),
+            ),
+          );
+        }
+        return out;
+      }
+
+      return CachedSessions(
+        sessions: rows(json['sessions']),
+        bots: rows(json['bots']),
+        workspaceVersion: json['workspaceVersion'] is String ? json['workspaceVersion'] as String : null,
+        scoped: json['scoped'] == true,
+        workspaceLabel: json['workspaceLabel'] is String ? json['workspaceLabel'] as String : null,
+      );
+    } on FormatException {
+      return null;
+    }
+  }
 }

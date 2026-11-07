@@ -14,6 +14,7 @@ import '../remote/relay/webrtc_peer.dart';
 import '../remote/secret_store.dart';
 import '../remote/ssh/ssh_host_config.dart';
 import '../remote/ssh/ssh_transport.dart';
+import 'offline_cache.dart';
 import 'sessions_state.dart';
 import 'read_list_epoch.dart';
 
@@ -213,6 +214,8 @@ class HostsController extends Notifier<HostsState> {
         await _secrets.delete(key);
       } catch (_) {}
     }
+    // iOS remote-only build: drop this host's on-disk conversation cache.
+    unawaited(OfflineCache.instance.clearHost(OfflineCache.hostKey(HostKind.ssh.name, id)));
     unawaited(ref.read(activeHostProvider.notifier).forget((h) => h == HostRef.ssh(id)));
   }
 

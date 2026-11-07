@@ -19,6 +19,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../l10n/l10n.dart';
 import 'bots_state.dart';
 import 'hosts_state.dart';
+import 'offline_cache.dart';
 import 'read_list_cache.dart';
 import 'read_list_identity.dart';
 import 'session_attention_state.dart';
@@ -516,6 +517,7 @@ class DrawerScope {
 /// Null until the list (and a selected workspace's members) have arrived.
 final drawerScopeProvider = Provider<DrawerScope?>((ref) {
   final sessions = ref.watch(sessionsProvider);
+  final host = ref.watch(activeHostProvider);
   final all = sessions.value;
   final identity = ref.watch(readListIdentityProvider);
   final connection = ref.watch(readListLiveConnectionProvider);
@@ -539,7 +541,17 @@ final drawerScopeProvider = Provider<DrawerScope?>((ref) {
   final pending = ref.watch(workspaceFilterPendingProvider);
   final workspaceKnown = prefs.selected == null || registryCurrent && registry.ready && workspace != null;
   if (!validSource || pending || !workspaceKnown || cache.origin(all) != null && !prefs.loaded) {
-    final cached = cache.get<CachedSessions>(key);
+    var cached = cache.get<CachedSessions>(key);
+    // iOS remote-only build: the in-memory cache is gone after a background
+    // kill, so fall back to the on-disk projection for this host. Only when
+    // the workspace selection is known; otherwise wait for prefs to load
+    // rather than showing another workspace's list.
+    cached ??= prefs.loaded
+        ? OfflineCache.instance.loadSessionsSync(
+            hostKey: OfflineCache.hostKey(host.kind.name, host.id),
+            workspace: prefs.selected == null ? 'all' : 'workspace:${prefs.selected}',
+          )
+        : null;
     if (cached == null) return null;
     // Once a registry is known, deletion or a changed path/membership version
     // invalidates the old projection. Offline, only the exact last confirmed
@@ -604,10 +616,11 @@ final drawerScopeProvider = Provider<DrawerScope?>((ref) {
         return result;
       }
     }
-    cache.put(
+    CachedSessions? projected;
+    final admitted = cache.put(
       key,
       all,
-      () => CachedSessions(
+      () => projected ??= CachedSessions(
         sessions: result.sessions,
         bots: result.bots,
         workspaceVersion: version,
@@ -624,6 +637,20 @@ final drawerScopeProvider = Provider<DrawerScope?>((ref) {
         [for (final row in result.bots) row.sessionId],
       ]).digest,
     );
+    // iOS remote-only build: mirror the admitted projection to disk so the
+    // drawer can show it after a background kill with no connection. Only
+    // what the memory cache admitted is written; a short-circuit (same
+    // revision) means the disk already holds identical content.
+    final disk = projected;
+    if (admitted && disk != null) {
+      unawaited(
+        OfflineCache.instance.saveSessions(
+          hostKey: OfflineCache.hostKey(host.kind.name, host.id),
+          workspace: prefs.selected == null ? 'all' : 'workspace:${prefs.selected}',
+          data: disk,
+        ),
+      );
+    }
   }
   return result;
 });

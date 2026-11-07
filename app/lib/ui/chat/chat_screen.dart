@@ -1371,6 +1371,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
                 stopping: s.stopping,
                 streamLost: s.streamLost,
                 syncing: s.syncing,
+                fromCache: s.fromCache,
                 resyncing: s.resyncing,
                 controlReady: s.controlReady,
                 connection: s.connection,
@@ -1439,6 +1440,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
       connecting: connAsync.isLoading && conn == null,
       starting: starting,
       connected: connected,
+      fromCache: chat?.fromCache ?? false,
       idleLabel: switch (localIdle) {
         RuntimePhase.notInstalled => l10n.phoneEngineNotInstalled,
         RuntimePhase.installed => l10n.commonStopped,
@@ -2025,6 +2027,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
     required bool connecting,
     required bool starting,
     required bool connected,
+    required bool fromCache,
     String? idleLabel,
     required bool streamLost,
     required bool syncing,
@@ -2036,6 +2039,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> with WidgetsBindingObse
     String? spoken,
   }) {
     if (!connected) {
+      // iOS remote-only build: cached content is on screen; say so instead
+      // of the bare "not connected".
+      if (fromCache) return HeaderStatus(StatusTone.idle, appL10n.readListOffline);
       if (starting) return HeaderStatus(StatusTone.busy, appL10n.chatStarting);
       return connecting
           ? HeaderStatus(StatusTone.busy, appL10n.chatConnecting)

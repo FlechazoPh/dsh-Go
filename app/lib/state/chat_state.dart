@@ -14,6 +14,7 @@ import 'connection_state.dart';
 import 'hosts_state.dart';
 import 'models_state.dart';
 import 'notify_state.dart' show appForegroundProvider;
+import 'offline_cache.dart';
 import 'run_pulse.dart';
 import 'sessions_state.dart';
 
@@ -247,6 +248,7 @@ class ChatState {
     this.questions = const [],
     this.hasMoreHistory = false,
     this.loading = true,
+    this.fromCache = false,
     this.loadingOlder = false,
     this.error,
     this.defaultModelSaveFailed = false,
@@ -283,6 +285,12 @@ class ChatState {
   final List<UserQuestionRequest> questions;
   final bool hasMoreHistory;
   final bool loading;
+
+  /// The items shown come from the on-disk cache, not from a live follow
+  /// snapshot. The header shows the offline label until the first fresh
+  /// snapshot replaces them; sending stays disabled via [controlReady].
+  final bool fromCache;
+
   final bool loadingOlder;
   final String? error;
 
@@ -352,6 +360,7 @@ class ChatState {
     bool? resyncing,
     bool? stopping,
     bool? loading,
+    bool? fromCache,
     bool? loadingOlder,
     String? error,
     bool clearError = false,
@@ -375,6 +384,7 @@ class ChatState {
     questions: questions,
     hasMoreHistory: hasMoreHistory,
     loading: loading ?? this.loading,
+    fromCache: fromCache ?? this.fromCache,
     loadingOlder: loadingOlder ?? this.loadingOlder,
     error: clearError ? null : (error ?? this.error),
     defaultModelSaveFailed: defaultModelSaveFailed ?? this.defaultModelSaveFailed,
@@ -426,6 +436,15 @@ class ChatController extends Notifier<ChatState> {
 
   final String sessionId;
   final ChatTranscript _transcript = ChatTranscript();
+
+  // iOS remote-only build: on-disk transcript cache (see offline_cache.dart).
+  // The controller only lives 60s after the screen leaves, so without this
+  // a background kill shows a blank chat until the next live snapshot.
+  bool _fromCache = false;
+  String _cacheHostKey = '';
+  String _cacheRestoreKey = '';
+  DateTime? _lastCacheSaveAt;
+  int _lastCacheSaveCursor = -1;
   StreamSubscription<DshEvent>? _sub;
   StreamSubscription<DshConnectionState>? _states;
   Timer? _flush;
@@ -521,6 +540,7 @@ class ChatController extends Notifier<ChatState> {
     // rebuild may reuse this Notifier for an identically named session there.
     // Reconnecting to the same Host keeps the existing conversation consent.
     final host = ref.watch(activeHostProvider);
+    _cacheHostKey = OfflineCache.hostKey(host.kind.name, host.id);
     if (_approvalHost != host) {
       // These requests belong to the previous Host, even if the new Host has
       // the same session id. A new watch replays its own mux's pending requests.
@@ -531,6 +551,8 @@ class ChatController extends Notifier<ChatState> {
       _approvalScope = Object();
       _autoApprove = false;
       _autoAnswered = const {};
+      _fromCache = false;
+      _cacheRestoreKey = '';
     }
     // Async continuations from the previous build no longer own these marks.
     _modelChange = null;
@@ -575,7 +597,10 @@ class ChatController extends Notifier<ChatState> {
     });
     // Not connected is a screen state (the composer explains it), not an
     // error. What was loaded stays until a new snapshot replaces it.
-    if (client == null) return _retained(loading: false);
+    if (client == null) {
+      _restoreFromDiskCache();
+      return _retained(loading: false);
+    }
     _sameClock = ref.read(activeConnectionProvider).value!.isLocal;
     if (_sameClock) {
       _quiet = false;
@@ -647,6 +672,7 @@ class ChatController extends Notifier<ChatState> {
     goal: _transcript.goal,
     hasMoreHistory: _transcript.hasMoreHistory,
     loading: loading,
+    fromCache: _fromCache,
     syncing: true,
     commands: _commandList(),
     model: _model,
@@ -656,6 +682,65 @@ class ChatController extends Notifier<ChatState> {
     autoAnswered: _autoAnswered,
     clockSkew: _skew ?? Duration.zero,
   );
+
+  /// iOS remote-only build: restores the last cached transcript for this
+  /// (host, session) when there is no live client and nothing is loaded yet.
+  /// The cached events are fed as a resync snapshot, so they merge into the
+  /// transcript exactly like a server resync; the first live snapshot after
+  /// reconnect replaces them. Synchronous and failure-proof: a missing or
+  /// corrupt file simply leaves the chat empty, as before.
+  void _restoreFromDiskCache() {
+    if (_transcript.items.isNotEmpty) return;
+    final key = '$_cacheHostKey/$sessionId';
+    if (_cacheRestoreKey == key) return;
+    _cacheRestoreKey = key;
+    final cached = OfflineCache.instance.loadMessagesSync(hostKey: _cacheHostKey, sessionId: sessionId);
+    if (cached == null || cached.events.isEmpty) return;
+    _transcript.apply(
+      SessionSnapshotEvent(
+        sessionId: sessionId,
+        header: SessionHeader.fromJson(const {}),
+        cursor: cached.cursor,
+        events: cached.events,
+        hasMore: cached.hasMore,
+        projections: SessionProjections.empty,
+        assistantRevision: null,
+        isResync: true,
+      ),
+    );
+    // A resync snapshot does not touch hasMoreHistory; restore it directly.
+    _transcript.hasMoreHistory = cached.hasMore;
+    _fromCache = true;
+  }
+
+  /// iOS remote-only build: persists the durable transcript for the offline
+  /// return. Fire-and-forget; failures are swallowed inside the cache.
+  void _saveMessagesCache() {
+    if (_client == null || _transcript.items.isEmpty) return;
+    final events = _transcript.events.toList(growable: false);
+    if (events.isEmpty) return;
+    _lastCacheSaveAt = DateTime.now();
+    _lastCacheSaveCursor = _transcript.cursor;
+    unawaited(
+      OfflineCache.instance.saveMessages(
+        hostKey: _cacheHostKey,
+        sessionId: sessionId,
+        events: events,
+        cursor: _transcript.cursor,
+        hasMore: _transcript.hasMoreHistory,
+      ),
+    );
+  }
+
+  /// Incremental saves during a turn, throttled so streaming does not
+  /// rewrite the file every frame.
+  void _maybeSaveMessagesCache() {
+    if (_client == null) return;
+    final lastSave = _lastCacheSaveAt;
+    if (_transcript.cursor == _lastCacheSaveCursor) return;
+    if (lastSave != null && DateTime.now().difference(lastSave) < const Duration(seconds: 5)) return;
+    _saveMessagesCache();
+  }
 
   void _markSyncing({SessionFollowEpoch? epoch, bool building = false}) {
     _followEpoch?.retire();
@@ -849,6 +934,8 @@ class ChatController extends Notifier<ChatState> {
               _lookupKey = null;
               _snapshotGeneration = client.mux.generation;
               _synchronized = true;
+              // The live snapshot replaces any cached content shown so far.
+              _fromCache = false;
               // One publication: no ready state containing the old inbox.
               _publish(freshSnapshot: true);
               if (!_syncReady.isCompleted) _syncReady.complete(true);
@@ -1151,6 +1238,7 @@ class ChatController extends Notifier<ChatState> {
       questions: _transcript.pendingQuestions.values.toList(),
       hasMoreHistory: _transcript.hasMoreHistory,
       loading: false,
+      fromCache: _fromCache,
       loadingOlder: state.loadingOlder,
       error: freshSnapshot ? null : state.error,
       defaultModelSaveFailed: _defaultModelSaveFailed,
@@ -1166,6 +1254,14 @@ class ChatController extends Notifier<ChatState> {
       goal: _transcript.goal,
       clockSkew: _skew ?? Duration.zero,
     );
+    // iOS remote-only build: persist the transcript for the offline return.
+    // A fresh snapshot saves at once; streaming saves are throttled, never
+    // on every frame.
+    if (freshSnapshot) {
+      _saveMessagesCache();
+    } else {
+      _maybeSaveMessagesCache();
+    }
   }
 
   /// Our pending prompts with their inbox slot, plus prompts waiting in the

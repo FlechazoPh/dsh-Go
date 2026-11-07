@@ -18,11 +18,15 @@ permissions:
 
 jobs:
   build-ios-unsigned:
-    # macos-15 (arm64) repeatedly failed to acquire a runner
-    # ("job was not acquired ... capacity constraints", 2026-11-06, twice).
-    # macos-15-intel is the same image family (same Xcode 26.x set) on the
-    # Intel capacity pool; an iOS arm64 IPA cross-compiles fine there.
-    runs-on: macos-15-intel
+    # Round 4 (2026-11-08): try the `xcode-27` image (macOS 27, Xcode 27.0
+    # default in /Applications/Xcode_27.app) so the Live Activity widget
+    # extension can use the iOS 27 SDK. `macos-26` only ships Xcode 26.x
+    # and `macos-26-arm64` is not a valid label (jobs queue forever).
+    # Fallback if this image cannot be acquired / cannot build: back to
+    # macos-15-intel + Xcode 26 (ActivityKit works there too, just without
+    # the iOS 27-only symbols, which the Swift code gates with
+    # `#if compiler(>=6.3)`).
+    runs-on: xcode-27
     timeout-minutes: 60
     env:
       FLUTTER_VERSION: 3.47.7
@@ -30,17 +34,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode 26
+      - name: Select Xcode 27
         # connectivity_plus 7.1+ needs the iOS 26 SDK (NWPath.isUltraConstrained);
-        # macos-15 defaults to Xcode 16.4, which cannot compile it. Pick the
-        # newest installed Xcode 26.x instead of hard-coding a patch version,
-        # so weekly image updates don't break the pin.
+        # the xcode-27 image ships Xcode 27.x. Pick the newest installed
+        # Xcode 27.x instead of hard-coding a patch version, so image
+        # updates don't break the pin. If no Xcode 27 is on the image,
+        # fail loudly and list what is there.
         run: |
-          XCODE="$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
-          test -n "$XCODE" || { echo "::error::No Xcode 26 on this runner image"; ls /Applications/ | grep -i xcode; exit 1; }
+          XCODE="$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1)"
+          test -n "$XCODE" || { echo "::error::No Xcode 27 on this runner image"; ls /Applications/ | grep -i xcode; exit 1; }
           echo "Using $XCODE"
           sudo xcode-select -s "$XCODE/Contents/Developer"
           xcodebuild -version
+          swift --version
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2

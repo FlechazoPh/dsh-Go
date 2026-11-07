@@ -24,7 +24,7 @@ import WidgetKit
 /// running/waiting = live, counting up from `since`; done/failed = the app
 /// first updates to the terminal text, then ends the activity immediately,
 /// so a finished turn never lingers on the lock screen.
-@available(iOS 16.1, *)
+@available(iOS 16.2, *)
 struct DSHLiveActivityWidget: Widget {
   var body: some WidgetConfiguration {
     ActivityConfiguration(for: DSHActivityAttributes.self) { context in
@@ -118,12 +118,12 @@ struct DSHLiveActivityWidget: Widget {
 
 // MARK: - State mapping
 
-@available(iOS 16.1, *)
+@available(iOS 16.2, *)
 private func isLiveKind(_ kind: String) -> Bool {
   kind == "running" || kind == "waiting"
 }
 
-@available(iOS 16.1, *)
+@available(iOS 16.2, *)
 private func iconName(for state: DSHActivityAttributes.ContentState) -> String {
   switch state.kind {
   case "waiting": return "questionmark.bubble.fill"
@@ -133,7 +133,7 @@ private func iconName(for state: DSHActivityAttributes.ContentState) -> String {
   }
 }
 
-@available(iOS 16.1, *)
+@available(iOS 16.2, *)
 private func tint(for state: DSHActivityAttributes.ContentState) -> Color {
   switch state.kind {
   case "waiting": return .orange
@@ -143,7 +143,7 @@ private func tint(for state: DSHActivityAttributes.ContentState) -> Color {
   }
 }
 
-@available(iOS 16.1, *)
+@available(iOS 16.2, *)
 private func kindLabel(for kind: String) -> String {
   switch kind {
   case "waiting": return "待确认"
@@ -157,7 +157,7 @@ private func kindLabel(for kind: String) -> String {
 /// usual (landscape, and the vertical island); there the title is shortened
 /// instead of being cut off mid-word. The full title stays on the lock
 /// screen, and under older SDKs this is just a plain one-line title.
-@available(iOS 16.1, *)
+@available(iOS 16.2, *)
 private struct IslandTitleText: View {
   let text: String
 
@@ -190,7 +190,7 @@ private struct NarrowIslandTitleText: View {
 }
 #endif
 
-@available(iOS 16.1, *)
+@available(iOS 16.2, *)
 @main
 struct DSHLiveActivityBundle: WidgetBundle {
   var body: some Widget {

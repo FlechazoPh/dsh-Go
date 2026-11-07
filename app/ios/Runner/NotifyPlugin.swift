@@ -158,14 +158,14 @@ final class NotifyPlugin: NSObject, FlutterPlugin, UNUserNotificationCenterDeleg
       // Live Activity: start / update / end from the LivePush Dart sends.
       // Dart ignores the return value; answer at once and do the
       // ActivityKit work on a Task (request/update/end are async).
-      if #available(iOS 16.1, *) {
+      if #available(iOS 16.2, *) {
         live16(args: call.arguments as? [String: Any])
       }
       result(nil)
     case "liveStatus":
       // LiveSystemStatus.fromMap reads these three; native defaults to true
       // when a map is returned.
-      if #available(iOS 16.1, *) {
+      if #available(iOS 16.2, *) {
         result([
           "supported": true,
           "allowed": ActivityAuthorizationInfo().areActivitiesEnabled,
@@ -269,14 +269,14 @@ final class NotifyPlugin: NSObject, FlutterPlugin, UNUserNotificationCenterDeleg
     }
   }
 
-  // MARK: - Live Activity (ActivityKit, iOS 16.1+)
+  // MARK: - Live Activity (ActivityKit, iOS 16.2+)
 
   // The box holds the running Activity. It is stored as `Any` because the
-  // Activity type itself is only available on iOS 16.1+ while this target
+  // Activity type itself is only available on iOS 16.2+ while this target
   // still deploys to iOS 15.0; every access goes through `#available`.
   private var liveBox: Any?
 
-  @available(iOS 16.1, *)
+  @available(iOS 16.2, *)
   private func live16(args: [String: Any]?) {
     let enabled = args?["enabled"] as? Bool ?? false
     let activity = args?["activity"] as? [String: Any]
@@ -435,7 +435,7 @@ private final class ActionsStreamHandler: NSObject, FlutterStreamHandler {
 
 /// Owns the one running Live Activity for the `dsh/notify` channel.
 ///
-/// iOS 16.1+ only (the whole class is gated; the Runner target still
+/// iOS 16.2+ only (the whole class is gated; the Runner target still
 /// deploys to iOS 15.0). The state it posts is built from the LivePush map
 /// Dart sends (`LiveActivity.toMap()`); the widget extension renders it.
 ///
@@ -450,7 +450,7 @@ private final class ActionsStreamHandler: NSObject, FlutterStreamHandler {
 ///   window is coalesced into one trailing update instead of being lost.
 /// - A request is only made while `areActivitiesEnabled` is true; a denied
 ///   system switch fails silently and `liveStatus` is how Dart finds out.
-@available(iOS 16.1, *)
+@available(iOS 16.2, *)
 private final class LiveActivityBox {
   private static let minUpdateInterval: TimeInterval = 0.6
   /// Live Activities end by themselves after 8 hours at most.

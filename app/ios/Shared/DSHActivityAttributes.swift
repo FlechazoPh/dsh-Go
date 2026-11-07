@@ -20,10 +20,14 @@ import Foundation
 /// - The state is kept small on purpose (short strings, one timestamp);
 ///   updates are local only, so the 4KB push limit does not apply, but
 ///   there is no reason to carry more.
-/// - Deployment target of the extension is iOS 16.1 (the first release
-///   with ActivityKit); the Runner app itself stays at iOS 15.0 and only
-///   touches ActivityKit behind `#available(iOS 16.1, *)`.
-@available(iOS 16.1, *)
+/// - Deployment target of the extension is iOS 16.2, not 16.1: ActivityKit
+///   itself appeared in 16.1, but the `request(attributes:content:)` /
+///   `update(_:)` / `end(_:dismissalPolicy:)` forms and `ActivityContent`
+///   are all 16.2+ (Xcode 27 errors on the 16.1 gate). The 16.1 forms
+///   (`request(attributes:contentState:)`, `update(using:)`) still exist
+///   but are the deprecated spelling; 16.2 costs nothing on the user's
+///   iOS 27 device.
+@available(iOS 16.2, *)
 struct DSHActivityAttributes: ActivityAttributes {
   struct ContentState: Codable, Hashable {
     /// "running" | "waiting" | "done" | "failed" (LiveKind.name).

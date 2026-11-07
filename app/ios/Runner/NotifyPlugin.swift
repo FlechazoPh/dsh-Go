@@ -75,7 +75,9 @@ final class NotifyPlugin: NSObject, FlutterPlugin, UNUserNotificationCenterDeleg
 
   // MARK: - MethodChannel
 
-  private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+  // Internal, not private: FlutterPlugin requires this method to be as
+  // accessible as the type.
+  func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
     switch call.method {
     case "status":
       notificationSettings { settings in

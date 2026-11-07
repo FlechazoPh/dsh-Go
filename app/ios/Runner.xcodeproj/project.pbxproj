@@ -20,7 +20,6 @@
 		359EBABDCDB86232000D8F58 /* DSHLiveActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0531E615C3C717206A161CE /* DSHLiveActivityWidget.swift */; };
 		430A9477B794A0B5C8B004FA /* DSHActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = D58F6FA1A0408A29FD8C2576 /* DSHActivityAttributes.swift */; };
 		CD0D94309448700BF91F2E1B /* DSHActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = D58F6FA1A0408A29FD8C2576 /* DSHActivityAttributes.swift */; };
-		37B6A62A268A9DFA1956A446 /* Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 3B22CA705D74865A035FA599 /* Info.plist */; };
 		5D592C953160613FC29B700B /* LiveActivity.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 02EF28CE9B43B72DBC801730 /* LiveActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
@@ -316,7 +315,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				37B6A62A268A9DFA1956A446 /* Info.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

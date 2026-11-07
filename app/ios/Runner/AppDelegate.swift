@@ -12,5 +12,10 @@ import UIKit
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    // iOS remote-only build: the `dsh/notify` channel is hand-written in this
+    // target (NotifyPlugin.swift), not a pub plugin, so it registers here.
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "NotifyPlugin") {
+      NotifyPlugin.register(with: registrar)
+    }
   }
 }

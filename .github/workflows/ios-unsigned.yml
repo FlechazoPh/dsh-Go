@@ -4,8 +4,10 @@
 # iOS Runner plus Dart-side remote-only gating (marked "iOS remote-only
 # build" in the touched files) and builds an unsigned IPA on a macOS runner.
 #
-# No Release is created: the IPA is only a workflow artifact for the owner's
-# own sideloading. Do not publish it anywhere.
+# This workflow only uploads the IPA as an artifact. Public distribution is
+# done by the upstream-sync workflow (or manually with `gh release create`):
+# it builds the same IPA and attaches it to a public `ios-vX.Y.Z` release.
+# Since 2026-11-09 the owner distributes the iOS build via public releases.
 name: iOS unsigned IPA (remote-only)
 
 on:
@@ -65,10 +67,11 @@ jobs:
 
       - name: Build unsigned IPA
         working-directory: app
-        run: >
-          flutter build ipa --no-codesign
-          --build-name 1.0.11
-          --build-number ${{ github.run_number }}
+        # --build-name comes from pubspec.yaml so an upstream sync only has
+        # to bump the version there; --build-number is the run number.
+        run: |
+          VER="$(grep '^version:' pubspec.yaml | sed 's/^version: *//; s/+.*//')"
+          flutter build ipa --no-codesign --build-name "$VER" --build-number ${{ github.run_number }}
 
       # --no-codesign archives but skips IPA export ("Codesigning disabled
       # with --no-codesign, skipping IPA"), so package the unsigned .app

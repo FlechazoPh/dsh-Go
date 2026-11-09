@@ -1,0 +1,261 @@
+# Follow upstream dsh-Go releases and rebuild the iOS remote-only IPA.
+#
+# Runs daily (01:00 UTC = 09:00 CST) and on demand. When upstream publishes
+# a new release tag, this merges that tag into ios-remote-only, rebuilds the
+# unsigned IPA and publishes it as a public `ios-vX.Y.Z` release.
+#
+# Safety: the sync target is always an upstream *release tag*, never
+# upstream main HEAD. A merge conflict or a build failure stops the run
+# before anything is pushed or released, and opens an issue in this fork
+# instead. Nothing is force-pushed, ever.
+#
+# Note: a push made with GITHUB_TOKEN does not trigger other workflows, so
+# this workflow does its own build + release instead of relying on
+# ios-unsigned.yml to run after the push.
+name: Upstream sync (iOS release)
+
+on:
+  schedule:
+    - cron: '0 1 * * *' # 01:00 UTC
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Upstream release tag to sync (e.g. v1.0.15); empty = latest upstream release'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  sync:
+    # Same image as ios-unsigned.yml: the Live Activity widget extension
+    # needs the iOS 27 SDK (Xcode 27). See that workflow for the fallback.
+    runs-on: xcode-27
+    timeout-minutes: 90
+    env:
+      BRANCH: ios-remote-only
+      STATE_FILE: .github/ios-upstream-sync.json
+      FLUTTER_VERSION: 3.47.7
+    steps:
+      - name: Checkout ios-remote-only
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BRANCH }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up git and fetch upstream
+        run: |
+          git config user.name "dsh-ios-sync[bot]"
+          git config user.email "dsh-ios-sync[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/ccch1mneyyy/dsh-Go.git 2>/dev/null || true
+          git fetch upstream --tags --quiet
+
+      - name: Decide target tag
+        id: target
+        run: |
+          WANT="${{ inputs.tag }}"
+          if [ -z "$WANT" ]; then
+            WANT="$(gh api repos/ccch1mneyyy/dsh-Go/releases/latest --jq .tag_name)"
+          fi
+          test -n "$WANT" || { echo "::error::Could not determine upstream target tag"; exit 1; }
+          git rev-parse "$WANT^{commit}" >/dev/null 2>&1 || { echo "::error::Upstream tag $WANT not found locally"; exit 1; }
+          CURRENT="$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('upstream_tag','v1.0.11'))" 2>/dev/null || echo v1.0.11)"
+          echo "tag=$WANT" >> "$GITHUB_OUTPUT"
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "Target: $WANT (currently synced: $CURRENT)"
+          # Refuse to sync backwards.
+          NEWER="$(printf '%s\n%s\n' "$CURRENT" "$WANT" | sort -V | tail -1)"
+          if [ "$NEWER" != "$WANT" ]; then
+            echo "::error::Target $WANT is not newer than current $CURRENT; refusing."
+            exit 1
+          fi
+          VER="${WANT#v}"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          if [ "$WANT" = "$CURRENT" ]; then
+            if gh release view "ios-$VER" >/dev/null 2>&1; then
+              echo "in_sync=true" >> "$GITHUB_OUTPUT"
+              echo "Already in sync and ios-$VER release exists; nothing to do."
+            else
+              echo "need_merge=false" >> "$GITHUB_OUTPUT"
+              echo "Tag already merged but ios-$VER release is missing; will build + release."
+            fi
+          else
+            echo "need_merge=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Stop if in sync
+        if: steps.target.outputs.in_sync == 'true'
+        run: echo "Already in sync; exiting quietly."
+
+      - name: Merge upstream tag
+        id: merge
+        if: steps.target.outputs.in_sync != 'true' && steps.target.outputs.need_merge == 'true'
+        run: |
+          TAG="${{ steps.target.outputs.tag }}"
+          if git merge --no-commit "$TAG" -m "ios: sync upstream $TAG into ios-remote-only"; then
+            echo "merged=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "merged=false" >> "$GITHUB_OUTPUT"
+            git diff --name-only --diff-filter=U > "$RUNNER_TEMP/conflict-files.txt" || true
+            git merge --abort || true
+            echo "::error::Merge conflict with $TAG; sync stopped before pushing."
+            exit 1
+          fi
+
+      - name: Record sync state
+        if: steps.target.outputs.in_sync != 'true' && steps.target.outputs.need_merge == 'true'
+        run: |
+          python3 - "$STATE_FILE" "${{ steps.target.outputs.tag }}" <<'PY'
+          import json, sys
+          p, tag = sys.argv[1], sys.argv[2]
+          json.dump({"upstream_tag": tag}, open(p, "w"), indent=2)
+          open(p, "a").write("\n")
+          PY
+          git add "$STATE_FILE"
+
+      - name: Select Xcode 27
+        if: steps.target.outputs.in_sync != 'true'
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1)"
+          test -n "$XCODE" || { echo "::error::No Xcode 27 on this runner image"; ls /Applications/ | grep -i xcode; exit 1; }
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+          swift --version
+
+      - name: Setup Flutter
+        if: steps.target.outputs.in_sync != 'true'
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Pub get
+        if: steps.target.outputs.in_sync != 'true'
+        working-directory: app
+        run: flutter pub get
+
+      - name: Analyze
+        if: steps.target.outputs.in_sync != 'true'
+        working-directory: app
+        run: flutter analyze
+
+      - name: Build unsigned IPA
+        id: build
+        if: steps.target.outputs.in_sync != 'true'
+        working-directory: app
+        run: |
+          VER="$(grep '^version:' pubspec.yaml | sed 's/^version: *//; s/+.*//')"
+          flutter build ipa --no-codesign --build-name "$VER" --build-number ${{ github.run_number }}
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Package unsigned IPA
+        if: steps.target.outputs.in_sync != 'true'
+        working-directory: app
+        run: |
+          VER="${{ steps.build.outputs.version }}"
+          IPA="dsh-go-ios-remote-only-$VER-b${{ github.run_number }}.ipa"
+          APP="build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app"
+          test -d "$APP" || { echo "::error::No Runner.app in archive"; find build/ios/archive -maxdepth 4 | head; exit 1; }
+          rm -rf /tmp/dsh-ipa && mkdir -p /tmp/dsh-ipa/Payload
+          cp -r "$APP" /tmp/dsh-ipa/Payload/
+          mkdir -p build/ios/ipa
+          (cd /tmp/dsh-ipa && zip -r -y "$GITHUB_WORKSPACE/app/build/ios/ipa/$IPA" Payload)
+          ls -la build/ios/ipa/
+          sha256sum "build/ios/ipa/$IPA"
+
+      - name: Commit and push sync
+        if: steps.target.outputs.in_sync != 'true' && steps.target.outputs.need_merge == 'true'
+        run: |
+          TAG="${{ steps.target.outputs.tag }}"
+          git commit -m "ios: sync upstream $TAG into ios-remote-only"
+          git push origin "$BRANCH"
+
+      - name: Write release notes
+        if: steps.target.outputs.in_sync != 'true'
+        run: |
+          OLD="${{ steps.target.outputs.current }}"
+          NEW="${{ steps.target.outputs.tag }}"
+          VER="${{ steps.target.outputs.version }}"
+          {
+            echo "## Upstream changes (from upstream docs/changelog.md, $OLD → $NEW)"
+            echo ""
+            git diff "$OLD" "$NEW" -- docs/changelog.md | grep '^+' | grep -v '^+++' | sed 's/^+//'
+            echo ""
+            echo "Upstream release notes: https://github.com/ccch1mneyyy/dsh-Go/releases/tag/$NEW"
+            echo ""
+            echo "## iOS remote-only build"
+            echo ""
+            echo "- This IPA is the iOS remote-only port of dsh-Go $VER: remote mode (SSH / DSH Remote) + chat only."
+            echo "- Removed: local engine, phone control, desktop pet, icon switching, in-app updates."
+            echo "- Unsigned: sideload it with SideStore / AltStore / Sideloadly (or your usual tool). A free Apple ID certificate lasts 7 days; re-sign weekly."
+            echo "- Minimum iOS 15.0. Live Activities / Dynamic Island need iOS 16.2+."
+            echo "- Notifications only fire while the app is alive; once iOS suspends it, no notification can be delivered without a push server."
+            echo "- Switching to the background disconnects and reconnects on return (upstream design); the offline cache shows the last session while offline."
+            echo "- See README-iOS.md for the full notes."
+          } > RELEASE_NOTES.md
+          wc -l RELEASE_NOTES.md
+
+      - name: Create public release
+        if: steps.target.outputs.in_sync != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VER="${{ steps.target.outputs.version }}"
+          IPA="app/build/ios/ipa/dsh-go-ios-remote-only-$VER-b${{ github.run_number }}.ipa"
+          test -f "$IPA" || { echo "::error::IPA not found: $IPA"; exit 1; }
+          gh release create "ios-$VER" --title "dsh-Go iOS remote-only $VER (b${{ github.run_number }})" --notes-file RELEASE_NOTES.md "$IPA"
+
+      - name: Open blocking issue
+        if: failure()
+        uses: actions/github-script@v7
+        env:
+          MERGE_OUTCOME: ${{ steps.merge.outcome }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          TAG: ${{ steps.target.outputs.tag }}
+        with:
+          script: |
+            const fs = require('fs');
+            const tag = process.env.TAG || '(unknown)';
+            const mergeOutcome = process.env.MERGE_OUTCOME || 'skipped';
+            const buildOutcome = process.env.BUILD_OUTCOME || 'skipped';
+            let title, body;
+            if (mergeOutcome === 'failure') {
+              const files = fs.existsSync(process.env.RUNNER_TEMP + '/conflict-files.txt')
+                ? fs.readFileSync(process.env.RUNNER_TEMP + '/conflict-files.txt', 'utf8').trim()
+                : '(unknown)';
+              title = `upstream sync blocked: merge conflict with ${tag}`;
+              body = [
+                `The upstream-sync workflow stopped while merging ${tag} into ios-remote-only.`,
+                ``,
+                `Conflicting files:`,
+                '```',
+                files,
+                '```',
+                ``,
+                `Nothing was pushed and no release was created. Resolve the merge manually on ios-remote-only (keep the iOS remote-only gating), then re-run the sync workflow.`,
+                ``,
+                `Run: ${context.payload.repository.html_url}/actions/runs/${context.runId}`,
+              ].join('\n');
+            } else {
+              title = `upstream sync blocked: iOS build failed for ${tag}`;
+              body = [
+                `The upstream-sync workflow merged ${tag} but the iOS build (analyze / flutter build ipa) failed.`,
+                ``,
+                `Nothing was pushed and no release was created. Check the run log, fix the break, then re-run the sync workflow.`,
+                ``,
+                `Run: ${context.payload.repository.html_url}/actions/runs/${context.runId}`,
+              ].join('\n');
+            }
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title, body,
+              labels: ['upstream-sync'],
+            });
